@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Нужно для получения всей истории коммитов
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -29,30 +32,60 @@ jobs:
           git checkout -b releases/${{ env.RELEASE_VERSION }}
           git push origin releases/${{ env.RELEASE_VERSION }}
           
+      - name: Setup YC CLI
+        run: |
+          curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+          echo "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" > key.json
+          yc config set service-account-key key.json
+          yc container registry configure-docker
+          
       - name: Build and push Docker image
         run: |
           docker build . -t cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }} \
-                         -t cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}_latest
-          docker login -u iam -p ${{ secrets.YC_IAM_TOKEN }} cr.yandex
+                         -t cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:latest
           docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}
-          docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}_latest
+          docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:latest
           
       - name: Create version tag
         run: |
           git tag -a v${{ env.RELEASE_VERSION }} -m "Release ${{ env.RELEASE_VERSION }}"
           git push origin v${{ env.RELEASE_VERSION }}
           
-      - name: Generate changelog
+      - name: Generate and commit changelog
         run: |
-          # Здесь будет скрипт генерации changelog
-          echo "Changelog for ${{ env.RELEASE_VERSION }}" > CHANGELOG.tmp
-          git log $(git describe --tags --abbrev=0)..HEAD --oneline >> CHANGELOG.tmp
-          echo "" >> CHANGELOG.md
-          cat CHANGELOG.tmp >> CHANGELOG.md
+          # Получаем предыдущий тег
+          PREV_TAG=$(git describe --tags --abbrev=0 || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            # Если это первый релиз, берем все коммиты
+            git log --oneline > CHANGELOG.tmp
+          else
+            # Иначе коммиты с предыдущего тега
+            git log $PREV_TAG..HEAD --oneline > CHANGELOG.tmp
+          fi
+          
+          # Обновляем CHANGELOG.md
+          echo -e "# Version ${{ env.RELEASE_VERSION }}\n\n$(cat CHANGELOG.tmp)\n\n$(cat CHANGELOG.md)" > CHANGELOG.new
+          mv CHANGELOG.new CHANGELOG.md
           rm CHANGELOG.tmp
+          
+          # Коммитим изменения
+          git add CHANGELOG.md
+          git commit -m "Update changelog for ${{ env.RELEASE_VERSION }}"
+          git push origin releases/${{ env.RELEASE_VERSION }}
           
       - name: Create release issue
         run: |
-          gh issue create --title "Release ${{ env.RELEASE_VERSION }}" --body "Release details:\n- Version: ${{ env.RELEASE_VERSION }}\n- Docker image: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}\n\nCommits:\n$(git log $(git describe --tags --abbrev=0)..HEAD --oneline)"
+          PREV_TAG=$(git describe --tags --abbrev=0 || echo "")
+          COMMITS=$(git log $PREV_TAG..HEAD --oneline | sed 's/^/- /')
+          
+          gh issue create \
+            --title "Release v${{ env.RELEASE_VERSION }}" \
+            --body "Release details:
+            - Version: ${{ env.RELEASE_VERSION }}
+            - Docker image: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}
+            
+            Commits since last release:
+            $COMMITS"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
