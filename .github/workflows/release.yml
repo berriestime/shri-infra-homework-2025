@@ -13,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
       - run: npm ci
       - run: npm run lint
       - run: npm run test
@@ -26,15 +24,12 @@ jobs:
     needs: lint_and_test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Setup YC CLI
         run: |
           curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -n
-          export PATH=$PATH:/home/runner/yandex-cloud/bin
+          echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
           yc --version
 
       - name: Generate IAM Token
@@ -43,28 +38,15 @@ jobs:
           YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
         run: |
           echo "$YC_SERVICE_ACCOUNT_KEY" > key.json
-          YC_TOKEN=$(yc iam create-token --service-account-key-file key.json)
-          echo "YC_TOKEN=$YC_TOKEN" >> $GITHUB_ENV
-          echo "Token generated (first 10 chars): ${YC_TOKEN:0:10}..."  # Debug output
+          echo "YC_TOKEN=$(yc iam create-token --service-account-key-file key.json)" >> $GITHUB_ENV
           rm -f key.json
-
-      - name: Debug Token
-        run: |
-          echo "Token length: ${#YC_TOKEN}"  # Should be > 0
-          if [ -z "$YC_TOKEN" ]; then
-            echo "Error: YC_TOKEN is empty!"
-            exit 1
-          fi
 
       - name: Login to Container Registry
         run: |
           echo "$YC_TOKEN" | docker login \
             --username iam \
             --password-stdin \
-            cr.yandex || {
-              echo "Docker login failed!"
-              exit 1
-            }
+            cr.yandex
 
       - name: Build and Push Docker Image
         run: |
