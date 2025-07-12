@@ -32,13 +32,16 @@ jobs:
           git checkout -b releases/${{ env.RELEASE_VERSION }}
           git push origin releases/${{ env.RELEASE_VERSION }}
           
-      - name: Debug Key
+      - name: Validate Secret
         run: |
-          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.txt
-          echo "=== Key Content ==="
-          cat key.txt
-          echo "=== Key Length ==="
-          wc -c key.txt
+          if [ -z "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" ]; then
+            echo "❌ ОШИБКА: Секрет YC_SERVICE_ACCOUNT_KEY пустой!"
+            exit 1
+          else
+            echo "✅ Секрет существует (длина: ${#SECRET} символов)"
+            echo "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" > key.json
+            jq empty key.json || (echo "❌ Невалидный JSON"; exit 1)
+          fi
 
       - name: Auth in Yandex Cloud  
         run: |
