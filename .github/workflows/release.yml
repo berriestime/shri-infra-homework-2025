@@ -32,31 +32,41 @@ jobs:
           git checkout -b releases/${{ env.RELEASE_VERSION }}
           git push origin releases/${{ env.RELEASE_VERSION }}
           
-      - name: Setup YC CLI and Docker auth
+      - name: Debug YC Key
         run: |
-          # Установка yc с явным указанием PATH
-          curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -n
-          export PATH=$PATH:/home/runner/yandex-cloud/bin
+          echo "=== Debug Start ==="
+          echo "Key length: $(echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | wc -c)"
+          echo "First 100 chars:"
+          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | head -c 100
+          echo -e "\nLast 100 chars:"
+          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | tail -c 100
           
-          # Проверка установки
-          yc --version
+          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.json
+          echo "=== File Content ==="
+          head -n 3 key.json
+          echo "..."
+          tail -n 3 key.json
           
-          # Настройка авторизации
-          echo "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" > key.json
+          if ! jq empty key.json; then
+            echo "❌ ERROR: Invalid JSON!"
+            exit 1
+          else
+            echo "✅ JSON is valid"
+          fi
+          echo "=== Debug End ==="
+
+      - name: Auth in Yandex Cloud
+        run: |
+          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.json
           yc config set service-account-key key.json
-          
-          # Настройка Docker
           yc container registry configure-docker
-          cat ~/.docker/config.json
+          rm -f key.json
           
       - name: Build and push Docker image
         run: |
-          # Сборка образов
           docker build . \
             -t cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }} \
             -t cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:latest
-          
-          # Загрузка образов
           docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:${{ env.RELEASE_VERSION }}
           docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/app:latest
           
@@ -67,34 +77,27 @@ jobs:
           
       - name: Generate and commit changelog
         run: |
-          # Получаем предыдущий тег
           PREV_TAG=$(git describe --tags --abbrev=0 || echo "")
           
           if [ -z "$PREV_TAG" ]; then
-            # Первый релиз - все коммиты
             git log --oneline > CHANGELOG.tmp
           else
-            # Коммиты с предыдущего тега
             git log $PREV_TAG..HEAD --oneline > CHANGELOG.tmp
           fi
           
-          # Обновляем CHANGELOG.md (новые версии сверху)
           echo -e "# Version ${{ env.RELEASE_VERSION }}\n$(date +%Y-%m-%d)\n\n$(cat CHANGELOG.tmp)\n\n$(cat CHANGELOG.md)" > CHANGELOG.new
           mv CHANGELOG.new CHANGELOG.md
           rm CHANGELOG.tmp
           
-          # Коммит изменений
           git add CHANGELOG.md
           git commit -m "chore(release): update changelog for v${{ env.RELEASE_VERSION }}"
           git push origin releases/${{ env.RELEASE_VERSION }}
           
       - name: Create release issue
         run: |
-          # Получаем список коммитов
           PREV_TAG=$(git describe --tags --abbrev=0 || echo "")
           COMMITS=$(git log $PREV_TAG..HEAD --oneline | sed 's/^/- /')
           
-          # Создаем issue
           gh issue create \
             --title "Release v${{ env.RELEASE_VERSION }}" \
             --body "## Release Details
