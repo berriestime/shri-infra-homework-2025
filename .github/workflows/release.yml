@@ -28,9 +28,24 @@ jobs:
 
       - name: Setup YC CLI
         run: |
-          curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -n
+          # Создаем директорию и устанавливаем с явными правами
+          mkdir -p /home/runner/yandex-cloud
+          curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | \
+            bash -s -- -i /home/runner/yandex-cloud -n
+          
+          # Добавляем в PATH и проверяем
           echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
-          yc --version
+          source ~/.bashrc  # Обновляем shell
+          
+          # Явная проверка установки
+          if [ -f "/home/runner/yandex-cloud/bin/yc" ]; then
+            echo "YC CLI installed successfully"
+            chmod +x /home/runner/yandex-cloud/bin/yc  # Добавляем права на выполнение
+            /home/runner/yandex-cloud/bin/yc --version
+          else
+            echo "Error: YC CLI binary not found!"
+            exit 1
+          fi
 
       - name: Generate IAM Token
         id: auth
