@@ -55,8 +55,16 @@ jobs:
           fi
           echo "=== Debug End ==="
 
-      - name: Auth in Yandex Cloud
+      - name: Auth in Yandex Cloud  
         run: |
+          # Установка YC CLI
+          curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -i /home/runner/yandex-cloud -n
+          export PATH=$PATH:/home/runner/yandex-cloud/bin
+          
+          # Проверка установки
+          yc --version
+          
+          # Аутентификация
           echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.json
           yc config set service-account-key key.json
           yc container registry configure-docker
