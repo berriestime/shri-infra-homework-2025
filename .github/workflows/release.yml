@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}  # crp1234567890
+  REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
   IMAGE_NAME: app
   VERSION: ${{ github.run_number }}
 
@@ -43,31 +43,44 @@ jobs:
           YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
         run: |
           echo "$YC_SERVICE_ACCOUNT_KEY" > key.json
-          echo "YC_TOKEN=$(yc iam create-token --service-account-key-file key.json)" >> $GITHUB_ENV
+          YC_TOKEN=$(yc iam create-token --service-account-key-file key.json)
+          echo "YC_TOKEN=$YC_TOKEN" >> $GITHUB_ENV
+          echo "Token generated (first 10 chars): ${YC_TOKEN:0:10}..."  # Debug output
           rm -f key.json
+
+      - name: Debug Token
+        run: |
+          echo "Token length: ${#YC_TOKEN}"  # Should be > 0
+          if [ -z "$YC_TOKEN" ]; then
+            echo "Error: YC_TOKEN is empty!"
+            exit 1
+          fi
 
       - name: Login to Container Registry
         run: |
-          echo "${{ env.YC_TOKEN }}" | docker login \
+          echo "$YC_TOKEN" | docker login \
             --username iam \
             --password-stdin \
-            cr.yandex
+            cr.yandex || {
+              echo "Docker login failed!"
+              exit 1
+            }
 
       - name: Build and Push Docker Image
         run: |
           docker build . \
-            -t cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} \
-            -t cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:latest
+            -t cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$VERSION \
+            -t cr.yandex/$REGISTRY_ID/$IMAGE_NAME:latest
           
-          docker push cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-          docker push cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:latest
+          docker push cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$VERSION
+          docker push cr.yandex/$REGISTRY_ID/$IMAGE_NAME:latest
 
       - name: Create Release Tag
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git tag -a v${{ env.VERSION }} -m "Release ${{ env.VERSION }}"
-          git push origin v${{ env.VERSION }}
+          git tag -a v$VERSION -m "Release $VERSION"
+          git push origin v$VERSION
 
       - name: Generate Changelog
         id: changelog
@@ -85,7 +98,7 @@ jobs:
       - name: Update CHANGELOG.md
         run: |
           {
-            echo "# Version ${{ env.VERSION }} ($(date +%Y-%m-%d))"
+            echo "# Version $VERSION ($(date +%Y-%m-%d))"
             echo ""
             echo "${{ steps.changelog.outputs.log }}"
             echo ""
@@ -93,7 +106,7 @@ jobs:
           } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
           
           git add CHANGELOG.md
-          git commit -m "Update changelog for v${{ env.VERSION }}"
+          git commit -m "Update changelog for v$VERSION"
           git push origin HEAD:main
 
       - name: Create Release Issue
