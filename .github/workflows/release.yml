@@ -32,28 +32,13 @@ jobs:
           git checkout -b releases/${{ env.RELEASE_VERSION }}
           git push origin releases/${{ env.RELEASE_VERSION }}
           
-      - name: Debug YC Key
+      - name: Debug Key
         run: |
-          echo "=== Debug Start ==="
-          echo "Key length: $(echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | wc -c)"
-          echo "First 100 chars:"
-          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | head -c 100
-          echo -e "\nLast 100 chars:"
-          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' | tail -c 100
-          
-          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.json
-          echo "=== File Content ==="
-          head -n 3 key.json
-          echo "..."
-          tail -n 3 key.json
-          
-          if ! jq empty key.json; then
-            echo "❌ ERROR: Invalid JSON!"
-            exit 1
-          else
-            echo "✅ JSON is valid"
-          fi
-          echo "=== Debug End ==="
+          echo '${{ secrets.YC_SERVICE_ACCOUNT_KEY }}' > key.txt
+          echo "=== Key Content ==="
+          cat key.txt
+          echo "=== Key Length ==="
+          wc -c key.txt
 
       - name: Auth in Yandex Cloud  
         run: |
