@@ -2,15 +2,25 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0, 1.1.0, 2.0.0)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type "yes" to confirm release creation'
+        required: true
+        default: 'no'
 
 env:
   REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
   IMAGE_NAME: app
-  VERSION: ${{ github.run_number }}
 
 jobs:
   lint_and_test:
     runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'yes'
+    
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,105 +33,133 @@ jobs:
   release:
     needs: lint_and_test
     runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.set_version.outputs.version }}
+      commits_list: ${{ steps.get_commits.outputs.commits }}
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup YC CLI
+      - name: Set release version
+        id: set_version
+        run: echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+
+      - name: Create release branch
         run: |
-          # Создаем директорию и устанавливаем с явными правами
-          mkdir -p /home/runner/yandex-cloud
-          curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | \
-            bash -s -- -i /home/runner/yandex-cloud -n
-          
-          # Добавляем в PATH и проверяем
-          echo "/home/runner/yandex-cloud/bin" >> $GITHUB_PATH
-          source ~/.bashrc  # Обновляем shell
-          
-          # Явная проверка установки
-          if [ -f "/home/runner/yandex-cloud/bin/yc" ]; then
-            echo "YC CLI installed successfully"
-            chmod +x /home/runner/yandex-cloud/bin/yc  # Добавляем права на выполнение
-            /home/runner/yandex-cloud/bin/yc --version
-          else
-            echo "Error: YC CLI binary not found!"
-            exit 1
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b releases/${{ steps.set_version.outputs.version }}
+          git push origin releases/${{ steps.set_version.outputs.version }}
+
+      - name: Get commits since last release
+        id: get_commits
+        run: |
+          LAST_TAG=$(git tag -l "*.*.*" --sort=-version:refname | head -n 1)
+          if [ -z "$LAST_TAG" ]; then
+            LAST_TAG=$(git rev-list --max-parents=0 HEAD)
           fi
-
-      - name: Generate IAM Token
-        id: auth
-        env:
-          YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-        run: |
-          echo "$YC_SERVICE_ACCOUNT_KEY" > key.json
-          echo "YC_TOKEN=$(yc iam create-token --service-account-key-file key.json)" >> $GITHUB_ENV
-          rm -f key.json
-
-      - name: Login to Container Registry
-        run: |
-          echo "$YC_TOKEN" | docker login \
-            --username iam \
-            --password-stdin \
-            cr.yandex
-
-      - name: Build and Push Docker Image
-        run: |
-          docker build . \
-            -t cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$VERSION \
-            -t cr.yandex/$REGISTRY_ID/$IMAGE_NAME:latest
-          
-          docker push cr.yandex/$REGISTRY_ID/$IMAGE_NAME:$VERSION
-          docker push cr.yandex/$REGISTRY_ID/$IMAGE_NAME:latest
-
-      - name: Create Release Tag
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git tag -a v$VERSION -m "Release $VERSION"
-          git push origin v$VERSION
-
-      - name: Generate Changelog
-        id: changelog
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            LOG=$(git log --oneline)
-          else
-            LOG=$(git log $PREV_TAG..HEAD --oneline)
-          fi
-          echo "log<<EOF" >> $GITHUB_OUTPUT
-          echo "$LOG" >> $GITHUB_OUTPUT
+          COMMITS=$(git log --pretty=format:"- %s (%h)" ${LAST_TAG}..HEAD)
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Login to Yandex Cloud Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: cr.yandex
+          username: json_key
+          password: ${{ secrets.JSON_CREDENTIALS }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ steps.set_version.outputs.version }}
+            cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Create git tag
+        run: |
+          git tag ${{ steps.set_version.outputs.version }}
+          git push origin ${{ steps.set_version.outputs.version }}
 
       - name: Update CHANGELOG.md
         run: |
-          {
-            echo "# Version $VERSION ($(date +%Y-%m-%d))"
-            echo ""
-            echo "${{ steps.changelog.outputs.log }}"
-            echo ""
-            [ -f CHANGELOG.md ] && cat CHANGELOG.md
-          } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-          
+          TODAY=$(date '+%Y-%m-%d')
+          TEMP_FILE=$(mktemp)
+          echo "# Version ${{ steps.set_version.outputs.version }} - $TODAY" > $TEMP_FILE
+          echo "" >> $TEMP_FILE
+          echo "${{ steps.get_commits.outputs.commits }}" >> $TEMP_FILE
+          echo "" >> $TEMP_FILE
+          if [ -f CHANGELOG.md ]; then
+            cat CHANGELOG.md >> $TEMP_FILE
+          fi
+          mv $TEMP_FILE CHANGELOG.md
           git add CHANGELOG.md
-          git commit -m "Update changelog for v$VERSION"
-          git push origin HEAD:main
+          git commit -m "Update CHANGELOG for version ${{ steps.set_version.outputs.version }}"
+          git push origin releases/${{ steps.set_version.outputs.version }}
 
-      - name: Create Release Issue
-        uses: actions/github-script@v6
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            docker pull cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ steps.set_version.outputs.version }}
+            docker stop app || true
+            docker rm app || true
+            docker run -d --name app \
+              -p 80:3000 \
+              cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ steps.set_version.outputs.version }}
+
+  create_issue:
+    runs-on: ubuntu-latest
+    needs: release
+    
+    steps:
+      - name: Create release issue
+        uses: actions/github-script@v7
+        env:
+          REGISTRY_ID: ${{ env.REGISTRY_ID }}
+          VERSION: ${{ needs.release.outputs.release_version }}
         with:
           script: |
-            await github.rest.issues.create({
+            const registryId = process.env.REGISTRY_ID;
+            const version = process.env.VERSION;
+            
+            const issueBody = `## Release Information
+            
+            **Date**: ${new Date().toISOString().split('T')[0]}
+            **Author**: @${{ github.actor }}
+            **Version**: ${version}
+            **Release Branch**: \`releases/${version}\`
+            
+            ## Docker Image
+            \`cr.yandex/${registryId}/app:${version}\`
+            
+            ## Changes in this Release
+            ${{ needs.release.outputs.commits_list }}
+            
+            ## Deployment Status
+            - Release branch created
+            - Docker image built and pushed  
+            - Git tag created
+            - CHANGELOG updated
+            - Successfully deployed to production VM
+            
+            ---
+            *This issue was automatically created by the release workflow.*`;
+            
+            const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Release v${{ env.VERSION }}`,
-              body: `
-              ## Deployment Info
-              - **Image**: \`cr.yandex/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}\`
-              - **Registry**: https://console.cloud.yandex.ru/folders/${{ secrets.YC_FOLDER_ID }}/container-registry/registries/${{ env.REGISTRY_ID }}
-              
-              ## Changelog
-              \`\`\`
-              ${{ steps.changelog.outputs.log }}
-              \`\`\`
-              `
+              title: `Release ${{ needs.release.outputs.release_version }}`,
+              body: issueBody,
+              labels: ['release']
             });
