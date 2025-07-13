@@ -66,7 +66,7 @@ jobs:
           echo "commits<<EOF" >> $GITHUB_OUTPUT
           echo "$COMMITS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -75,7 +75,7 @@ jobs:
         with:
           registry: cr.yandex
           username: json_key
-          password: ${{ secrets.JSON_CREDENTIALS }}
+          password: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
